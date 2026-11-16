@@ -238,22 +238,36 @@
   }
 
   function hero() {
+    var top = DATA.rows.slice(0, 10);
+    var metrics = [
+      [fmtUsd(top.reduce(function (sum, r) { return sum + r.implied_value_usd; }, 0)), 'Top 10 implied value', 'Combined model estimate'],
+      [String(DATA.rows.filter(function (r) { return r.watchlist; }).length), 'Watchlist protocols', 'Above the TVL floor'],
+      [fmtMult(DATA.calibration.global_multiple), 'Median peer multiple', DATA.calibration.global_peers + ' live tokens calibrated'],
+      [String(DATA.rows.length), 'Protocols ranked', 'Pre-token opportunity set']
+    ];
     return el('section', { class: 'hero' },
-      el('div', null,
-        el('h1', { text: 'Pre-token protocols, ranked by implied value' }),
-        el('p', null,
-          'The watchlist is the floor: every protocol with at least ', el('b', { text: '$' + Math.round(DATA.floor_usd / 1e6) + 'M' }),
-          ' of TVL and no token on record. The early radar adds the strongest pre-token protocols below that floor. ',
-          'Implied value is peer-calibrated: each category is priced at the median market cap per dollar of TVL of the tokens already trading in it. ',
-          'It is a model, not a promise.')
-      ),
-      el('div', { class: 'stats' },
-        el('div', { class: 'stat hot' }, el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size }), el('span', { text: 'Watchlist covered' })),
-        el('div', { class: 'stat' }, el('b', { text: String(DATA.board_size) }), el('span', { text: 'Pre-token rows ranked' })),
-        el('div', { class: 'stat' }, el('b', { text: String(DATA.early_size) }), el('span', { text: 'Early rows below the floor' })),
-        el('div', { class: 'stat' }, el('b', { text: String(DATA.live_total) }), el('span', { text: 'Live-token protocols set aside' }))
-      )
+      el('div', { class: 'hero-copy' },
+        el('div', { class: 'eyebrow', text: 'PRE-TOKEN INTELLIGENCE / SEALED SNAPSHOT' }),
+        el('h1', null, 'Find the signal. ', el('span', { text: 'Before the token.' })),
+        el('p', { text: 'Discover pre-token DeFi protocols ranked by peer-calibrated implied value. Compare the opportunity, inspect the math, build your farm plan.' })),
+      el('div', { class: 'stats' }, metrics.map(function (m, i) {
+        return el('div', { class: 'stat' + (i === 0 ? ' hot' : '') }, el('span', { text: m[1] }), el('b', { text: m[0] }), el('small', { text: m[2] }));
+      }))
     );
+  }
+
+  function topChart() {
+    var top = DATA.rows.slice(0, 10);
+    var max = top[0].implied_value_usd;
+    return el('section', { class: 'panel leaders', 'aria-label': 'Top ten protocols by implied value' },
+      el('div', { class: 'chart-heading' }, el('div', null, el('div', { class: 'eyebrow', text: 'THE LEADING SIGNALS' }), el('h2', { text: 'Top 10 · implied value' })), el('span', { class: 'sub', text: 'USD · peer-calibrated estimates, not token prices' })),
+      el('div', { class: 'chart-grid' }, top.map(function (r) {
+        return el('button', { type: 'button', class: 'chart-row', onclick: function () { openDetail(r.slug); }, 'aria-label': r.name + ': ' + fmtUsd(r.implied_value_usd) },
+          el('span', { class: 'chart-rank', text: String(r.rank).padStart(2, '0') }),
+          el('span', { class: 'chart-name', text: r.name }),
+          el('span', { class: 'chart-track' }, el('i', { style: 'width:' + Math.max(2, r.implied_value_usd / max * 100) + '%' })),
+          el('b', { class: 'num', text: fmtUsd(r.implied_value_usd) }));
+      })), el('div', { class: 'chart-caption', text: '01—10 / Ranked by model estimate · Select any signal to investigate →' }));
   }
 
   function tabButton(name, label) {
@@ -332,9 +346,9 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
-        el('td', { class: 'num' + (r.rank <= 3 ? ' gold' : ''), text: String(r.rank) }),
+        el('td', null, el('span', { class: 'rank rank-' + r.rank, text: String(r.rank).padStart(2, '0') })),
         el('td', null, el('div', { class: 'name' }, el('b', { text: r.name }))),
-        el('td', { class: 'sub', text: r.category || 'Other' }),
+        el('td', null, el('span', { class: 'category cat-' + familyOf(r.category), text: r.category || 'Other' })),
         el('td', { class: 'sub', text: chainsCell(r) }),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + growthClass, text: growth }),
@@ -373,7 +387,7 @@
     DATA.live.forEach(function (r) {
       tbody.appendChild(el('tr', null,
         el('td', null, el('div', { class: 'name' }, el('b', { text: r.name }))),
-        el('td', { class: 'sub', text: r.category || 'Other' }),
+        el('td', null, el('span', { class: 'category cat-' + familyOf(r.category), text: r.category || 'Other' })),
         el('td', { class: 'sub', text: chainsCell(r) }),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + (r.change_7d !== null && r.change_7d >= 0 ? 'pos' : 'neg'), text: fmtPct(r.change_7d) }),
@@ -472,7 +486,14 @@
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
-      el('h3', { text: 'Implied value' }),
+      el('div', { class: 'eyebrow', text: 'VALUE DECOMPOSITION' }),
+      el('div', { class: 'value-head', text: fmtUsd(row.implied_value_usd) }),
+      el('div', { class: 'value-flow' }, [
+        [fmtUsd(row.tvl_usd), 'TVL'],
+        [fmtMult(row.model.multiple), 'Peer multiple'],
+        ['x' + row.model.growth_multiplier.toFixed(3), 'Growth tilt'],
+        ['x' + row.model.maturity_multiplier.toFixed(3), 'Maturity']
+      ].map(function (v) { return el('div', null, el('b', { class: 'num', text: v[0] }), el('span', { text: v[1] })); })),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Peer multiple' }), el('b', { class: 'num', text: fmtMult(row.model.multiple) })),
@@ -500,7 +521,7 @@
           )
         );
     dialog.appendChild(el('section', { class: 'detail-section' },
-      el('h3', { text: 'Live peers in ' + (row.category || 'this category') }),
+      el('h3', { text: 'Calibration peers · ' + (row.category || 'this category') }),
       peersSection
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
@@ -531,6 +552,7 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(hero());
+    if (state.tab === 'board') shell.appendChild(topChart());
     shell.appendChild(tabs());
     if (state.tab === 'board') {
       shell.appendChild(controls());
@@ -549,6 +571,12 @@
     if (state.selected && !dialog.open) openDetail(state.selected);
   }
 
+  window.addEventListener('hashchange', function () {
+    if (dialog.open) dialog.removeAttribute('open');
+    state = { q: '', category: 'all', chain: 'all', watchlist: false, tab: 'board', sort: 'implied', dir: -1, selected: null };
+    readHash();
+    render();
+  });
   readHash();
   render();
   window.addEventListener('keydown', function (e) {

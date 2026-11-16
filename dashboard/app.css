@@ -173,3 +173,84 @@ tbody tr:last-child td { border-bottom: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* A quiet instrument panel, with bright signals and compact data density. */
+:root { --bg:#080e18; --panel:#101a28; --panel-2:#172437; --line:#253246; --ink:#eef4fc; --muted:#97a9bf; --accent:#65edc3; --sky:#81baff; }
+body { background:radial-gradient(ellipse at 85% 0%, #162a3b 0, transparent 42%),var(--bg); font-size:14px; }
+.shell { max-width:1440px; padding:22px 40px 48px; }
+.top { padding-bottom:17px; }
+.brand-name { font-size:16px; letter-spacing:.12em; }
+.top-meta { font-size:11px; }
+.hero { display:block; padding:25px 0 20px; }
+.eyebrow { color:var(--accent); font:600 10px/1.5 var(--font-num); letter-spacing:.16em; }
+h1 { margin-top:8px; font-size:35px; letter-spacing:-1.2px; }
+h1 span { color:#8fa3bc; font-weight:400; }
+.hero p { max-width:100ch; font-size:13px; margin-top:9px; }
+.stats { grid-template-columns:repeat(4,1fr); gap:0; margin-top:22px; border:1px solid var(--line); border-radius:12px; background:linear-gradient(110deg,#142b32,#111c2b 40%); overflow:hidden; }
+.stat { background:none; border:0; border-right:1px solid var(--line); border-radius:0; padding:14px 22px; }
+.stat:last-child { border:0; }
+.stat span { display:block; font-size:11px; }
+.stat b { font-size:27px; margin:4px 0; letter-spacing:-1px; }
+.stat small { color:#7289a2; font-size:10px; }
+.leaders { padding:18px 22px 12px; margin-bottom:20px; background:linear-gradient(120deg,#122332,#101925); box-shadow:0 12px 40px #0002; }
+.chart-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+.chart-heading h2 { margin-top:3px; font-size:17px; }
+.chart-heading .sub { font-size:10px; }
+.chart-grid { display:grid; grid-template-rows:repeat(5,1fr); grid-auto-flow:column; grid-template-columns:1fr 1fr; column-gap:44px; row-gap:7px; }
+.chart-row { display:grid; grid-template-columns:22px 140px 1fr 76px; gap:10px; align-items:center; background:transparent; border:0; padding:3px 0; text-align:left; min-width:0; }
+.chart-row:hover { background:#ffffff08; }
+.chart-rank { font:10px var(--font-num); color:#6e879f; }
+.chart-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.chart-row b { font-size:12px; text-align:right; color:#d7f6ef; }
+.chart-track { height:13px; background:#203043; border-radius:3px; overflow:hidden; }
+.chart-track i { display:block; height:100%; background:linear-gradient(90deg,#299c92,#73efc7); border-radius:3px; }
+.chart-row:nth-child(n+6) .chart-track i { background:linear-gradient(90deg,#376b91,#74b9d4); }
+.chart-caption { border-top:1px solid var(--line); margin-top:13px; padding-top:9px; color:#7891a7; font:10px var(--font-num); }
+.tabs { border:0; padding:0; background:none; gap:8px; }
+.tabs button { padding:0 18px; font-size:12px; min-height:34px; }
+.tabs button[aria-pressed="true"] { background:#64edc31a; color:var(--accent); box-shadow:inset 0 -2px var(--accent); border-radius:5px 5px 0 0; }
+.tabs button[aria-pressed="true"]:hover { color:var(--accent); }
+.controls { padding:13px 0; margin-top:8px; }
+.field label { font-size:10px; text-transform:uppercase; letter-spacing:.09em; }
+.field input,.field select,.check { min-height:34px; font-size:12px; }
+.field input { min-width:260px; }
+th,td { padding:10px 12px; border-color:#213044; }
+thead th { font-size:10px; text-transform:uppercase; letter-spacing:.06em; background:#162234; }
+tbody tr { transition:background .15s; }
+tbody tr:hover { background:#1c3344; }
+.name b { font-size:13px; }
+.rank { display:inline-grid; place-items:center; width:28px; height:26px; border-radius:6px; font:11px var(--font-num); color:#7f96b0; }
+.rank-1 { color:#ffdd81; background:#b888252a; border:1px solid #ba954e77; }
+.rank-2 { color:#e0e9f7; background:#b2c6e227; border:1px solid #acbfd044; }
+.rank-3 { color:#efb58f; background:#ac69382a; border:1px solid #bf895044; }
+.category { display:inline-block; padding:3px 8px; background:#8aa8cc15; color:#aabed8; border:1px solid #8aa8cc22; border-radius:5px; font-size:10px; white-space:nowrap; }
+.cat-lend,.cat-stable { color:#aab6ff; background:#8d85ff15; border-color:#8d85ff33; }
+.cat-stake,.cat-vault,.cat-yield { color:#77d8cb; background:#4bbba015; border-color:#4bbba033; }
+.cat-dex,.cat-derivatives { color:#f0b4d0; background:#d77ca515; border-color:#d77ca533; }
+.cat-rwa,.cat-btc { color:#e6c58a; background:#d3a65315; border-color:#d3a65333; }
+.bar { width:75px; height:4px; }
+.implied .num { color:#d3f7ed; font-weight:600; }
+.detail { width:min(680px,96vw); padding:28px 30px; background:linear-gradient(150deg,#152638,#0e1725 65%); box-shadow:-20px 0 90px #0008; }
+.detail::backdrop { background:#030912aa; backdrop-filter:blur(3px); }
+.detail h2 { font-size:30px; }
+.value-head { font:600 38px var(--font-num); color:var(--accent); margin:8px 0 17px; letter-spacing:-1.8px; }
+.value-flow { display:grid; grid-template-columns:repeat(4,1fr); margin-bottom:20px; gap:8px; }
+.value-flow > div { position:relative; padding:13px 8px; border:1px solid #365066; border-radius:8px; background:#0a1623; text-align:center; }
+.value-flow > div + div:before { content:'×'; position:absolute; left:-9px; top:19px; background:#122032; color:var(--accent); font-size:13px; z-index:1; }
+.value-flow b { display:block; font-size:14px; }
+.value-flow span { display:block; margin-top:5px; font-size:10px; color:var(--muted); }
+.equation { font-size:11px; gap:7px; }
+.detail-section { margin-top:20px; padding-top:17px; }
+.detail-section > .sub { font-size:11px; margin-top:10px; }
+.peers { font-size:11px; }
+.peers td,.peers th { padding:7px 8px; }
+@media(max-width:900px) { .shell { padding:18px; } h1 { font-size:28px; } .stats { grid-template-columns:1fr 1fr; } .chart-grid { grid-template-columns:1fr; grid-auto-flow:row; grid-template-rows:none; } .chart-heading { gap:12px; } .chart-heading .sub { max-width:150px; } .chart-row { grid-template-columns:22px 120px 1fr 70px; } }
+/* Keep several ranked rows in view alongside the overview at laptop sizes. */
+.hero { padding:18px 0 16px; }
+.hero p { max-width:110ch; }
+.stats { margin-top:16px; }
+.stat { padding:11px 22px; }
+.leaders { padding-top:14px; margin-bottom:14px; }
+.chart-heading { margin-bottom:9px; }
+.chart-grid { row-gap:3px; }
+.chart-caption { margin-top:9px; }
