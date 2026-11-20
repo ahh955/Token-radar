@@ -1,15 +1,45 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:,">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Radar — what each unlaunched token would be worth, and whether farming it pays</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<header class="top">
+<div class="brand"><span class="dot"></span><b>TOKEN RADAR</b><span class="q">Which pre-token protocol is worth farming next — and what do I do about it?</span></div>
+<nav class="tabs"><a href="#view=board" id="tab-board">Board</a><a href="#view=live" id="tab-live">Live tokens</a><a href="#view=method" id="tab-method">Method &amp; tests</a></nav>
+</header>
+<main id="board-view">
+<section id="kpis" class="kpis"></section>
+<p id="formula" class="formula"></p>
+<section id="account" class="account"></section>
+<p id="integrity" class="integrity"></p>
+<section class="evidence">
+<div class="ev"><h2>Out-of-sample evidence</h2><div id="ablation"></div><p id="rangehon" class="small"></p></div>
+<div class="ev"><h2>Market cap vs TVL — the fitted curve</h2><canvas id="scatter" width="560" height="92"></canvas><p class="small" id="scatter-note"></p></div>
+</section>
+<section class="controls">
+<input id="q" type="search" placeholder="Search protocol…" aria-label="Search">
+<select id="f-cat" aria-label="Category"></select>
+<select id="f-chain" aria-label="Chain"></select>
+<select id="f-tier" aria-label="Tier"><option value="">All tiers</option><option value="watchlist">Watchlist</option><option value="early">Early</option><option value="off-list">Off-list</option></select>
+<select id="f-verdict" aria-label="Verdict"><option value="">Any verdict</option><option value="FARM">FARM</option><option value="MARGINAL-THIN">Marginal-thin</option><option value="SKIP">Skip</option></select>
+<label>Deposit $<select id="f-dep"><option value="" selected>Plan size</option><option>500</option><option>1000</option><option>2500</option><option>5000</option><option>10000</option></select></label>
+<label>Drop share <select id="f-share"><option value="0.05">5%</option><option value="0.1" selected>10%</option><option value="0.2">20%</option></select></label>
+<button id="csv">CSV</button><button id="json">JSON</button>
+</section>
+<p id="port" class="port"></p>
+<div class="tablewrap"><table id="board"><thead><tr>
+<th data-s="rank">#</th><th data-s="name">Protocol</th><th data-s="tvl">TVL</th><th data-s="chg7">7D</th><th data-s="age">No-token age</th><th data-s="odds">Token odds</th><th data-s="ifLaunches">If it launches</th><th data-s="implied">Implied value</th><th data-s="net">Verdict · net of fees</th><th data-s="netHour">Net / hour</th>
+</tr></thead><tbody id="rows"></tbody></table></div>
+<p id="foot" class="foot"></p>
+</main>
+<main id="detail-view" hidden></main>
+<main id="live-view" hidden></main>
+<main id="method-view" hidden></main>
+<footer class="fine">DefiLlama snapshot 2026-11-14 · 758 protocols · “Records no token” is the list's record, not proof a protocol has none · Not a forecast, not financial advice.</footer>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
