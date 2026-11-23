@@ -1,4 +1,4 @@
-// Token Radar's model, radar-3: a fitted comps curve, token odds from the
+// Token Radar's model, radar-4: a fitted comps curve, token odds from the
 // peers' record, held-out tests, and costed farm verdicts.
 //
 // One snapshot of the protocol universe in, one ranked board out. Nothing is
@@ -14,6 +14,10 @@
 //               CAT_SHRINK pseudo-observations, capped at xCAT_CAP.
 //   growth      1 + GROWTH_WEIGHT x 7-day TVL change, held to [0.8, 1.25].
 //   seasoning   0.85 + 0.15 x min(1, age_days / 730), held to [0.7, 1.15].
+//   chains      10^(slope x (log10(chain count) - mean)), slope fitted on
+//               the comps' residuals inside each fold, centred so the
+//               level never shifts; adopted in round 5 after passing both
+//               held-out tests in round 4's ablation.
 //   odds        P(records a token) by age-with-no-token bucket, counted over
 //               all 758 protocols and shrunk toward the base rate.
 //   implied     value-if-launches x odds, whole dollars, distinct per row.
@@ -71,6 +75,7 @@ export interface RadarRow {
   catF: number;
   growthF: number;
   seasonF: number;
+  chainsF: number;
   ifLaunches: number;
   odds: number;
   implied: number;
@@ -101,6 +106,9 @@ export interface Radar {
   comps_n: number;
   curve: { a: number; b: number; r2: number; formula: string };
   cat_offsets: { cat: string; n: number; factor: number }[];
+  // The adopted chain-count term: fitted slope and centring mean, so the
+  // dashboard can state the term exactly as fitted.
+  chains: { slope: number; mean: number };
   tests: {
     loo: { miss: number; within3: number; cov50: number; cov80: number; n: number };
     time: { miss: number; within3: number; cov50: number; cov80: number; n: number };
@@ -324,8 +332,9 @@ interface FitOptions {
   cat: boolean;
   growth: boolean;
   season: boolean;
-  // Optional fitted terms, tested in the ablation only — the adopted model
-  // (FULL_OPTS) never sets them, so the board cannot change.
+  // Optional fitted terms: chain count is part of the adopted model
+  // (FULL_OPTS sets it); log-age is tested in the ablation only and never
+  // adopted — it improves LOO but worsens the older->newer test.
   chains?: boolean;
   logAge?: boolean;
 }
@@ -336,7 +345,14 @@ type Predictor = (p: Protocol, age: number | null) => number;
 // no fitted parameters, so refits only re-estimate the curve and the
 // category effects. The optional fitted terms fit their slope on the
 // training rows' residuals inside each fold, like the curve — no peeking.
-function makePredictor(rows: Protocol[], ages: Map<string, number | null>, opts: FitOptions): Predictor {
+// `info`, when given, receives the fitted chain-count term of this fit
+// (slope and centring mean), so the caller can price the per-row factor.
+function makePredictor(
+  rows: Protocol[],
+  ages: Map<string, number | null>,
+  opts: FitOptions,
+  info?: { chainsSlope?: number; chainsMean?: number },
+): Predictor {
   const f = fitCurve(rows);
   const fx = opts.cat ? categoryEffects(rows, f) : new Map<string, number>();
   const base = (p: Protocol, age: number | null) => {
@@ -367,6 +383,10 @@ function makePredictor(rows: Protocol[], ages: Map<string, number | null>, opts:
   };
   const chainsTerm = opts.chains ? fitTerm((p) => Math.log10(Math.max(1, p.chains.length))) : null;
   const logAgeTerm = opts.logAge ? fitTerm((_p, age) => (age === null ? null : Math.log10(Math.max(1, age)))) : null;
+  if (info && chainsTerm) {
+    info.chainsSlope = chainsTerm.slope;
+    info.chainsMean = chainsTerm.mean;
+  }
   return (p: Protocol, age: number | null) => {
     let v = base(p, age);
     if (chainsTerm) v += chainsTerm.slope * (Math.log10(Math.max(1, p.chains.length)) - chainsTerm.mean);
@@ -644,7 +664,7 @@ function farmSteps(p: Protocol, play: FarmPlay, chain: string, gas: number, depo
 
 // ---- the build ---------------------------------------------------------------
 
-const FULL_OPTS: FitOptions = { cat: true, growth: true, season: true };
+const FULL_OPTS: FitOptions = { cat: true, growth: true, season: true, chains: true };
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Radar } {
   const asOfMs = Date.parse(`${snapshot.as_of}T00:00:00Z`);
@@ -709,33 +729,37 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const catV = variant({ cat: true, growth: false, season: false });
   const growthV = variant({ cat: false, growth: true, season: false });
   const seasonV = variant({ cat: false, growth: false, season: true });
-  // Two more candidate terms, tested the same way and never adopted in
-  // this round: their slopes are fitted inside each fold, like the curve.
+  // Chain count is adopted in this round (it passed both tests in round
+  // 4's ablation); log-age is tested the same way and still not adopted —
+  // it improves LOO but worsens the older->newer test. Both slopes are
+  // fitted inside each fold, like the curve.
   const chainsV = variant({ cat: false, growth: false, season: false, chains: true });
   const logAgeV = variant({ cat: false, growth: false, season: false, logAge: true });
   const kept = (v: { loo: number; time: number }) =>
     v.loo <= curveLoo.miss && v.time <= curveTime.miss && (v.loo < curveLoo.miss || v.time < curveTime.miss) ? 'kept' : 'tested, not kept';
-  // A candidate that passes both tests is still NOT adopted here (this
-  // round is display-only) — it is labelled honestly as held, not kept.
-  const held = (v: { loo: number; time: number }) =>
-    kept(v) === 'kept' ? 'passes tests — held for a future model round' : 'tested, not kept';
   const ablation = [
     { term: 'Flat mcap/TVL multiple', loo: flatLoo.miss, time: flatTime.miss, verdict: 'baseline' },
     { term: 'Size curve log(mcap) on log(TVL)', loo: curveLoo.miss, time: curveTime.miss, verdict: 'kept' },
     { term: 'Curve + category only', loo: catV.loo, time: catV.time, verdict: kept(catV) },
     { term: 'Curve + 7-day growth only', loo: growthV.loo, time: growthV.time, verdict: kept(growthV) },
     { term: 'Curve + seasoning only', loo: seasonV.loo, time: seasonV.time, verdict: kept(seasonV) },
-    { term: 'Curve + chain count only', loo: chainsV.loo, time: chainsV.time, verdict: held(chainsV) },
-    { term: 'Curve + log-age only', loo: logAgeV.loo, time: logAgeV.time, verdict: held(logAgeV) },
-    { term: 'Full model (all four terms)', loo: loo.miss, time: time.miss, verdict: 'kept' },
+    { term: 'Curve + chain count only', loo: chainsV.loo, time: chainsV.time, verdict: kept(chainsV) },
+    { term: 'Curve + log-age only', loo: logAgeV.loo, time: logAgeV.time, verdict: kept(logAgeV) },
+    { term: 'Full model (all five terms)', loo: loo.miss, time: time.miss, verdict: 'kept' },
   ];
 
   // Bands from the final model's leave-one-out residuals.
   const residuals = looResiduals(comps, ages, FULL_OPTS);
   const bands = { q10: quantile(residuals, 0.1), q25: quantile(residuals, 0.25), q75: quantile(residuals, 0.75), q90: quantile(residuals, 0.9) };
 
-  // Price every rankable protocol.
-  const fullPred = makePredictor(comps, ages, FULL_OPTS);
+  // Price every rankable protocol. The full fit's chain-count term is
+  // captured here so each row can carry its own chains factor.
+  const chainsInfo: { chainsSlope?: number; chainsMean?: number } = {};
+  const fullPred = makePredictor(comps, ages, FULL_OPTS, chainsInfo);
+  const chainsSlope = chainsInfo.chainsSlope ?? 0;
+  const chainsMean = chainsInfo.chainsMean ?? 0;
+  const chainsFactor = (p: Protocol): number =>
+    Math.pow(10, chainsSlope * (Math.log10(Math.max(1, p.chains.length)) - chainsMean));
   interface Priced {
     p: Protocol;
     age: number | null;
@@ -743,6 +767,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     catF: number;
     growthF: number;
     seasonF: number;
+    chainsF: number;
     ifLaunches: number;
     odds: number;
     implied: number;
@@ -753,9 +778,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     const catF = Math.pow(10, catFx.get(p.category ?? 'Uncategorised') ?? 0);
     const growthF = growthFactor(p);
     const seasonF = seasonFactor(age);
+    const chainsF = chainsFactor(p);
     const ifLaunches = Math.pow(10, fullPred(p, age));
     const odds = oddsFor(age, oddsModel);
-    return { p, age, curve, catF, growthF, seasonF, ifLaunches, odds, implied: Math.max(1, Math.round(ifLaunches * odds)) };
+    return { p, age, curve, catF, growthF, seasonF, chainsF, ifLaunches, odds, implied: Math.max(1, Math.round(ifLaunches * odds)) };
   });
 
   // Rank by implied value; ties break by slug, then values are nudged down
@@ -820,6 +846,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       catF: round4(pr.catF),
       growthF: round4(pr.growthF),
       seasonF: round4(pr.seasonF),
+      chainsF: round4(pr.chainsF),
       ifLaunches: Math.max(1, Math.round(pr.ifLaunches)),
       odds: round4(pr.odds),
       implied: pr.implied,
@@ -874,6 +901,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       formula: `10^${curveFit.a.toFixed(2)} x TVL^${curveFit.b.toFixed(3)}`,
     },
     cat_offsets: catOffsets,
+    chains: { slope: round4(chainsSlope), mean: round4(chainsMean) },
     tests: {
       loo,
       time,

@@ -62,7 +62,7 @@ function renderHead() {
     ['40/40', 'watchlist on the board', R.snapshot_n + ' protocols accounted for'],
   ].map((k) => '<div class="kpi"><b>' + k[0] + '</b><span>' + k[1] + '</span><em>' + k[2] + '</em></div>').join('');
   $('formula').innerHTML = 'implied value = <code>' + esc(R.curve.formula) + '</code> (fitted on ' + R.comps_n +
-    ' traded tokens, one per ticker) × category × growth × seasoning × token odds (Brier ' +
+    ' traded tokens, one per ticker) × category × growth × seasoning × chain count × token odds (Brier ' +
     t.brier.model + ' vs ' + t.brier.base + ' base rate, n=' + t.brier.n + ').';
   const A = R.accounting;
   const seg = [['ranked', A.ranked, '#5eead4'], ['already record a token', A.trades, '#38bdf8'], ['set aside by rule', A.setAside, '#f59e0b']];
@@ -75,7 +75,7 @@ function renderHead() {
   // the totals, the checksum and the watchlist count, here in the browser.
   let ok = 0;
   for (const r of R.rows) {
-    const v = r.curve * r.catF * r.growthF * r.seasonF * r.odds;
+    const v = r.curve * r.catF * r.growthF * r.seasonF * r.chainsF * r.odds;
     if (Math.abs(v - r.implied) / r.implied < 0.02) ok++;
   }
   const sum = R.rows.reduce((a, r) => a + r.implied, 0);
@@ -86,12 +86,10 @@ function renderHead() {
   $('ablation').innerHTML = '<table class="mini"><tr><th>Model term</th><th class="num">LOO miss</th><th class="num">Time miss</th><th>Verdict</th></tr>' +
     R.ablation.map((a) => {
       const v = a.verdict === 'kept' ? '<b style="color:#86efac">kept</b>' : a.verdict === 'baseline' ? 'baseline'
-        : a.verdict.indexOf('held') >= 0 ? '<b style="color:#fbbf24">held</b>' : '<b style="color:#fbbf24">' + a.verdict + '</b>';
+        : '<b style="color:#fbbf24">' + a.verdict + '</b>';
       return '<tr><td>' + esc(a.term) + '</td><td class="num">×' + a.loo + '</td><td class="num">×' + a.time + '</td><td>' + v + '</td></tr>';
     }).join('') + '</table>' +
-    '<p class="small">Each row adds one term; chain-count and log-age slopes are fitted inside each fold.</p>' +
-    (R.ablation.some((a) => a.verdict.indexOf('held') >= 0)
-      ? '<p class="small">“Held” = passes both tests but not adopted — the model is unchanged from round 3.</p>' : '');
+    '<p class="small">Each row adds one term; the chain-count slope is fitted inside each fold. Chain count is live in the model this round — it passed both tests in round 4; log-age was tested the same way and not kept.</p>';
   const br = t.brier;
   $('odds').innerHTML = '<table class="mini"><tr><th>Odds forecast</th><th class="num">Brier</th><th class="num">n</th></tr>' +
     '<tr><td>Base rate only</td><td class="num">' + br.base + '</td><td class="num">' + br.n + '</td></tr>' +
@@ -233,7 +231,8 @@ function renderDetail() {
     ['Size curve', full(r.curve), R.curve.formula + ' on ' + R.comps_n + ' traded tokens'],
     ['Category ×' + r.catF.toFixed(3), full(Math.round(r.curve * r.catF)), r.cat + ' — mean residual, shrunk with k=40 pseudo-peers, capped ×2.5'],
     ['Growth ×' + r.growthF.toFixed(3), full(Math.round(r.curve * r.catF * r.growthF)), '7-day TVL change ' + pct(r.chg7) + ', weight 0.5, held to ×0.8–×1.25'],
-    ['Seasoning ×' + r.seasonF.toFixed(3), full(r.ifLaunches), 'No-token age ' + ageStr(r.age) + ' — factor ×0.85–×1.00'],
+    ['Seasoning ×' + r.seasonF.toFixed(3), full(Math.round(r.curve * r.catF * r.growthF * r.seasonF)), 'No-token age ' + ageStr(r.age) + ' — factor ×0.85–×1.00'],
+    ['Chain count ×' + r.chainsF.toFixed(3), full(r.ifLaunches), r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + ' — slope ' + R.chains.slope.toFixed(3) + ' on log10(chain count), centred on the comps'],
     ['Value if it launches', full(r.ifLaunches), 'Held-out miss ×' + t.loo.miss + ' (LOO) / ×' + t.time.miss + ' (older→newer)'],
     ['Token odds ×' + r.odds.toFixed(3), full(r.implied), 'Share of protocols that record a token at this age, shrunk toward the ' + Math.round(R.tests.brier.base * 100) + '% base rate'],
   ];
@@ -251,7 +250,7 @@ function renderDetail() {
     '<div class="box"><b>' + full(r.ifLaunches) + '</b><span>value if it launches</span></div>' +
     '<div class="box"><b>' + Math.round(r.odds * 100) + '%</b><span>token odds</span></div>' +
     '<div class="box"><b>' + fmt(r.p25) + ' – ' + fmt(r.p75) + '</b><span>P25–P75 band (P10–P90: ' + fmt(r.p10) + ' – ' + fmt(r.p90) + ')</span></div></div>' +
-    '<p class="small">Recomputed in this browser from the stored factors: ' + full(r.curve) + ' × ' + r.catF.toFixed(3) + ' × ' + r.growthF.toFixed(3) + ' × ' + r.seasonF.toFixed(3) + ' × ' + r.odds.toFixed(3) + ' = ' + full(r.implied) + ' — board.json carries the same value at rank ' + r.rank + '.</p>' +
+    '<p class="small">Recomputed in this browser from the stored factors: ' + full(r.curve) + ' × ' + r.catF.toFixed(3) + ' × ' + r.growthF.toFixed(3) + ' × ' + r.seasonF.toFixed(3) + ' × ' + r.chainsF.toFixed(3) + ' × ' + r.odds.toFixed(3) + ' = ' + full(r.implied) + ' — board.json carries the same value at rank ' + r.rank + '.</p>' +
     '<h2>How the figure is made</h2><table class="mini"><tr><th>Step</th><th class="num">Value</th><th>Fit basis</th></tr>' +
     decomp.map((d) => '<tr><td><b>' + esc(d[0]) + '</b></td><td class="num">' + d[1] + '</td><td>' + esc(d[2]) + '</td></tr>').join('') + '</table>' +
     '<h2>Nearest traded peers</h2><table class="mini"><tr><th>Token</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th><th class="num">Curve says</th><th class="num">Actual / curve</th></tr>' +
@@ -284,7 +283,7 @@ function renderDetail() {
 function renderLive() {
   $('live-view').innerHTML = '<div class="method"><h1 style="font-size:20px">Live tokens — kept apart, never ranked</h1>' +
     '<p>' + R.live.length + ' protocols record a token with a market cap. They price the curve (' + R.comps_n + ' of them, one per ticker, ' +
-    'excluding the set-aside kinds) and never appear on the ranked board. “Curve says” is the size curve alone, before category, growth and seasoning.</p>' +
+    'excluding the set-aside kinds) and never appear on the ranked board. “Curve says” is the size curve alone, before category, growth, seasoning and chain count.</p>' +
     '<table class="mini"><tr><th>Token</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th><th class="num">Curve says</th><th class="num">Actual / curve</th></tr>' +
     R.live.map((p) => {
       const cs = Math.pow(10, R.curve.a + R.curve.b * Math.log10(p.tvl));
@@ -309,8 +308,9 @@ function renderMethod() {
     '<h2>The curve</h2><p>Log market cap on log TVL, fitted by least squares on ' + R.comps_n + ' traded tokens (one row per ticker, ' +
     'positive market cap, never a set-aside kind): <b>' + esc(R.curve.formula) + '</b>. A flat multiple is shown only as the beaten baseline. ' +
     '16 snapshot records carry a zero or negative market cap and are excluded from the fit.</p>' +
-    '<h2>Category, growth, seasoning</h2><p>Each category shifts the curve by its mean residual, shrunk toward the curve with 40 pseudo-observations and capped at ×2.5 — ' +
+    '<h2>Category, growth, seasoning, chain count</h2><p>Each category shifts the curve by its mean residual, shrunk toward the curve with 40 pseudo-observations and capped at ×2.5 — ' +
     'thin categories barely move the value. Growth carries the 7-day TVL change at weight 0.5, held to ×0.8–×1.25. Seasoning runs ×0.85–×1.00 by days with no token. ' +
+    'Chain count multiplies the value by 10^(slope × (log10(chain count) − mean)), with the slope (' + R.chains.slope.toFixed(3) + ') fitted on the comps’ residuals and centred so the level never shifts. The fitted slope is negative, so a protocol on more chains prices lower per dollar of TVL, all else equal. ' +
     'A term stays only if it never worsens either held-out test and improves at least one (see the ablation table on the board).</p>' +
     '<h2>Token odds</h2><p>The share of protocols that record a token, by age bucket, counted over all ' + R.snapshot_n + ' protocols and shrunk toward the ' +
     Math.round(R.tests.brier.base * 100) + '% base rate with 20 pseudo-observations. Brier score ' + t.brier.model + ' against ' + t.brier.base + ' for the base rate alone (n=' + t.brier.n + ', lower is better).</p>' +
