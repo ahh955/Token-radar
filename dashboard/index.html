@@ -17,8 +17,9 @@
 <section id="account" class="account"></section>
 <p id="integrity" class="integrity"></p>
 <section class="evidence">
-<div class="ev"><h2>Out-of-sample evidence</h2><div id="ablation"></div><p id="rangehon" class="small"></p></div>
-<div class="ev"><h2>Market cap vs TVL — the fitted curve</h2><canvas id="scatter" width="560" height="92"></canvas><p class="small" id="scatter-note"></p></div>
+<div class="ev"><h2>Out-of-sample evidence — the value model</h2><div id="ablation"></div></div>
+<div class="ev"><h2>Token odds — Brier ladder &amp; the peers’ record</h2><div id="odds"></div></div>
+<div class="ev"><h2>Market cap vs TVL — the fitted curve</h2><canvas id="scatter" width="560" height="70"></canvas><p class="small" id="scatter-note"></p><p id="rangehon" class="small"></p></div>
 </section>
 <section class="controls">
 <input id="q" type="search" placeholder="Search protocol…" aria-label="Search">
@@ -30,6 +31,8 @@
 <label>Drop share <select id="f-share"><option value="0.05">5%</option><option value="0.1" selected>10%</option><option value="0.2">20%</option></select></label>
 <button id="csv">CSV</button><button id="json">JSON</button>
 </section>
+<p id="breakeven" class="small"></p>
+<section id="bestfarms" class="bestfarms"></section>
 <p id="port" class="port"></p>
 <div class="tablewrap"><table id="board"><thead><tr>
 <th data-s="rank">#</th><th data-s="name">Protocol</th><th data-s="tvl">TVL</th><th data-s="chg7">7D</th><th data-s="age">No-token age</th><th data-s="odds">Token odds</th><th data-s="ifLaunches">If it launches</th><th data-s="implied">Implied value</th><th data-s="net">Verdict · net of fees</th><th data-s="netHour">Net / hour</th>

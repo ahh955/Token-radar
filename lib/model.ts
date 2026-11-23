@@ -105,8 +105,10 @@ export interface Radar {
     loo: { miss: number; within3: number; cov50: number; cov80: number; n: number };
     time: { miss: number; within3: number; cov50: number; cov80: number; n: number };
     flat: { loo_miss: number; time_miss: number };
-    brier: { model: number; base: number; n: number };
+    brier: { model: number; base: number; unshrunk: number; n: number };
   };
+  // Per age bucket: raw share recording a token, shrunk odds, counts.
+  odds_buckets: { label: string; n: number; hit: number; share: number; odds: number }[];
   ablation: { term: string; loo: number; time: number; verdict: string }[];
   accounting: { ranked: number; trades: number; setAside: number; reasons: { reason: string; n: number }[] };
   totals: { implied: number; tvl: number; farm: number; marginal: number; skip: number };
@@ -322,21 +324,56 @@ interface FitOptions {
   cat: boolean;
   growth: boolean;
   season: boolean;
+  // Optional fitted terms, tested in the ablation only — the adopted model
+  // (FULL_OPTS) never sets them, so the board cannot change.
+  chains?: boolean;
+  logAge?: boolean;
 }
 
 type Predictor = (p: Protocol, age: number | null) => number;
 
 // A predictor returns log10(value-if-launches). Growth and seasoning carry
 // no fitted parameters, so refits only re-estimate the curve and the
-// category effects.
-function makePredictor(rows: Protocol[], opts: FitOptions): Predictor {
+// category effects. The optional fitted terms fit their slope on the
+// training rows' residuals inside each fold, like the curve — no peeking.
+function makePredictor(rows: Protocol[], ages: Map<string, number | null>, opts: FitOptions): Predictor {
   const f = fitCurve(rows);
   const fx = opts.cat ? categoryEffects(rows, f) : new Map<string, number>();
-  return (p: Protocol, age: number | null) => {
+  const base = (p: Protocol, age: number | null) => {
     let v = f.a + f.b * Math.log10(p.tvl_usd);
     if (opts.cat) v += fx.get(p.category ?? 'Uncategorised') ?? 0;
     if (opts.growth) v += Math.log10(growthFactor(p));
     if (opts.season) v += Math.log10(seasonFactor(age));
+    return v;
+  };
+  // OLS slope of the base residuals on one centred feature, fit on the
+  // training rows with a known feature value. Centring means a missing
+  // value contributes zero (mean-imputed) and the level never shifts.
+  const fitTerm = (feature: (p: Protocol, age: number | null) => number | null): { slope: number; mean: number } => {
+    const xs = rows.map((p) => feature(p, ages.get(p.slug) ?? null));
+    const known = xs.map((x, i) => (x === null ? -1 : i)).filter((i) => i >= 0);
+    if (known.length < 2) return { slope: 0, mean: 0 };
+    const mean = known.reduce((s, i) => s + xs[i]!, 0) / known.length;
+    const res = known.map((i) => Math.log10(rows[i]!.mcap_usd!) - base(rows[i]!, ages.get(rows[i]!.slug) ?? null));
+    const rMean = res.reduce((s, r) => s + r, 0) / res.length;
+    let num = 0;
+    let den = 0;
+    known.forEach((i, k) => {
+      const dx = xs[i]! - mean;
+      num += dx * (res[k]! - rMean);
+      den += dx * dx;
+    });
+    return { slope: den === 0 ? 0 : num / den, mean };
+  };
+  const chainsTerm = opts.chains ? fitTerm((p) => Math.log10(Math.max(1, p.chains.length))) : null;
+  const logAgeTerm = opts.logAge ? fitTerm((_p, age) => (age === null ? null : Math.log10(Math.max(1, age)))) : null;
+  return (p: Protocol, age: number | null) => {
+    let v = base(p, age);
+    if (chainsTerm) v += chainsTerm.slope * (Math.log10(Math.max(1, p.chains.length)) - chainsTerm.mean);
+    if (logAgeTerm) {
+      const x = age === null ? null : Math.log10(Math.max(1, age));
+      if (x !== null) v += logAgeTerm.slope * (x - logAgeTerm.mean);
+    }
     return v;
   };
 }
@@ -376,31 +413,31 @@ function scoreErrors(errs: number[]): { miss: number; within3: number; cov50: nu
 }
 
 // Leave-one-out: each comp priced by a fit that never saw it.
-function looTest(comps: Protocol[], ages: Map<string, number | null>, build: (rows: Protocol[]) => Predictor): TestResult {
+function looTest(comps: Protocol[], ages: Map<string, number | null>, build: (rows: Protocol[], ages: Map<string, number | null>) => Predictor): TestResult {
   const errs: number[] = [];
   for (let i = 0; i < comps.length; i++) {
     const rest = comps.filter((_, j) => j !== i);
-    const pred = build(rest);
+    const pred = build(rest, ages);
     errs.push(Math.log10(comps[i]!.mcap_usd!) - pred(comps[i]!, ages.get(comps[i]!.slug) ?? null));
   }
   return { ...scoreErrors(errs), n: comps.length };
 }
 
 // Time split: the older half of the dated comps prices the newer half.
-function timeTest(comps: Protocol[], ages: Map<string, number | null>, build: (rows: Protocol[]) => Predictor): TestResult {
+function timeTest(comps: Protocol[], ages: Map<string, number | null>, build: (rows: Protocol[], ages: Map<string, number | null>) => Predictor): TestResult {
   const dated = comps
     .filter((p) => p.listed_at)
     .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug < b.slug ? -1 : 1));
   const half = Math.floor(dated.length / 2);
   const train = dated.slice(0, half);
   const test = dated.slice(half);
-  const pred = build(train);
+  const pred = build(train, ages);
   const errs = test.map((p) => Math.log10(p.mcap_usd!) - pred(p, ages.get(p.slug) ?? null));
   // Bands for the coverage check come from the training set's own LOO errors.
   const trainErrs: number[] = [];
   for (let i = 0; i < train.length; i++) {
     const rest = train.filter((_, j) => j !== i);
-    const pr = build(rest);
+    const pr = build(rest, ages);
     trainErrs.push(Math.log10(train[i]!.mcap_usd!) - pr(train[i]!, ages.get(train[i]!.slug) ?? null));
   }
   const q25 = quantile(trainErrs, 0.25);
@@ -422,7 +459,7 @@ function looResiduals(comps: Protocol[], ages: Map<string, number | null>, opts:
   const errs: number[] = [];
   for (let i = 0; i < comps.length; i++) {
     const rest = comps.filter((_, j) => j !== i);
-    const pred = makePredictor(rest, opts);
+    const pred = makePredictor(rest, ages, opts);
     errs.push(Math.log10(comps[i]!.mcap_usd!) - pred(comps[i]!, ages.get(comps[i]!.slug) ?? null));
   }
   return errs;
@@ -438,13 +475,31 @@ function bucketOf(age: number | null): number {
   return -1;
 }
 
+interface OddsBucket {
+  label: string;
+  n: number;
+  hit: number;
+  share: number;
+  odds: number;
+}
+
 interface OddsModel {
   base: number;
   odds: number[];
+  buckets: OddsBucket[];
+}
+
+// "0–90 days", "91–180 days", "181–365 days", "1–2 years", "2–4 years", "4+ years".
+function bucketLabel([lo, hi]: [number, number]): string {
+  if (hi >= 1e9) return `${Math.round(lo / 365)}+ years`;
+  if (hi > 365) return `${Math.round(lo / 365)}–${Math.round(hi / 365)} years`;
+  return `${lo}–${hi} days`;
 }
 
 // P(records a token) by age bucket, counted over the whole snapshot and
 // shrunk toward the base rate with ODDS_SHRINK pseudo-observations.
+// The raw per-bucket shares are exported too, for the peers'-record chart
+// and the unshrunk Brier rung.
 function fitOdds(protocols: Protocol[], ages: Map<string, number | null>): OddsModel {
   const base = protocols.filter(hasToken).length / protocols.length;
   const counts = AGE_BUCKETS.map(() => ({ hit: 0, n: 0 }));
@@ -455,7 +510,14 @@ function fitOdds(protocols: Protocol[], ages: Map<string, number | null>): OddsM
     if (hasToken(p)) counts[b]!.hit++;
   }
   const odds = counts.map((c) => clamp((c.hit + ODDS_SHRINK * base) / (c.n + ODDS_SHRINK), ODDS_LO, ODDS_HI));
-  return { base, odds };
+  const buckets = counts.map((c, i) => ({
+    label: bucketLabel(AGE_BUCKETS[i]!),
+    n: c.n,
+    hit: c.hit,
+    share: c.n > 0 ? c.hit / c.n : base,
+    odds: odds[i]!,
+  }));
+  return { base, odds, buckets };
 }
 
 function oddsFor(age: number | null, model: OddsModel): number {
@@ -479,6 +541,22 @@ function brierScore(protocols: Protocol[], ages: Map<string, number | null>, mod
     n++;
   }
   return { model: round2(sm / n), base: round2(sb / n), n };
+}
+
+// Brier score of the RAW bucket shares (no shrinkage) — the middle rung of
+// the odds ladder, scored with the same procedure on the same n.
+function brierUnshrunk(protocols: Protocol[], ages: Map<string, number | null>, model: OddsModel): number {
+  let s = 0;
+  let n = 0;
+  for (const p of protocols) {
+    const age = ages.get(p.slug) ?? null;
+    if (age === null) continue;
+    const b = bucketOf(age);
+    const y = hasToken(p) ? 1 : 0;
+    s += ((b < 0 ? model.base : model.buckets[b]!.share) - y) ** 2;
+    n++;
+  }
+  return round2(s / n);
 }
 
 // ---- farm economics ----------------------------------------------------------
@@ -610,9 +688,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const catFx = categoryEffects(comps, curveFit);
   const oddsModel = fitOdds(protocols, ages);
   const brier = brierScore(protocols, ages, oddsModel);
+  const brierUnshrunkScore = brierUnshrunk(protocols, ages, oddsModel);
 
   // Held-out tests of the final model, plus the flat baseline.
-  const buildFull = (rows: Protocol[]) => makePredictor(rows, FULL_OPTS);
+  const buildFull = (rows: Protocol[], a: Map<string, number | null>) => makePredictor(rows, a, FULL_OPTS);
   const loo = looTest(comps, ages, buildFull);
   const time = timeTest(comps, ages, buildFull);
   const flatLoo = looTest(comps, ages, flatPredictor);
@@ -621,24 +700,34 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   // Term-by-term ablation, each variant against the curve alone. A term is
   // kept when it never worsens either held-out test and improves at least
   // one; the numbers below are the rounded misses the page prints.
-  const curveLoo = looTest(comps, ages, (rows) => makePredictor(rows, { cat: false, growth: false, season: false }));
-  const curveTime = timeTest(comps, ages, (rows) => makePredictor(rows, { cat: false, growth: false, season: false }));
+  const curveLoo = looTest(comps, ages, (rows, a) => makePredictor(rows, a, { cat: false, growth: false, season: false }));
+  const curveTime = timeTest(comps, ages, (rows, a) => makePredictor(rows, a, { cat: false, growth: false, season: false }));
   const variant = (opts: FitOptions) => ({
-    loo: looTest(comps, ages, (rows) => makePredictor(rows, opts)).miss,
-    time: timeTest(comps, ages, (rows) => makePredictor(rows, opts)).miss,
+    loo: looTest(comps, ages, (rows, a) => makePredictor(rows, a, opts)).miss,
+    time: timeTest(comps, ages, (rows, a) => makePredictor(rows, a, opts)).miss,
   });
   const catV = variant({ cat: true, growth: false, season: false });
   const growthV = variant({ cat: false, growth: true, season: false });
   const seasonV = variant({ cat: false, growth: false, season: true });
+  // Two more candidate terms, tested the same way and never adopted in
+  // this round: their slopes are fitted inside each fold, like the curve.
+  const chainsV = variant({ cat: false, growth: false, season: false, chains: true });
+  const logAgeV = variant({ cat: false, growth: false, season: false, logAge: true });
   const kept = (v: { loo: number; time: number }) =>
     v.loo <= curveLoo.miss && v.time <= curveTime.miss && (v.loo < curveLoo.miss || v.time < curveTime.miss) ? 'kept' : 'tested, not kept';
+  // A candidate that passes both tests is still NOT adopted here (this
+  // round is display-only) — it is labelled honestly as held, not kept.
+  const held = (v: { loo: number; time: number }) =>
+    kept(v) === 'kept' ? 'passes tests — held for a future model round' : 'tested, not kept';
   const ablation = [
-    { term: 'One flat mcap/TVL multiple', loo: flatLoo.miss, time: flatTime.miss, verdict: 'baseline' },
+    { term: 'Flat mcap/TVL multiple', loo: flatLoo.miss, time: flatTime.miss, verdict: 'baseline' },
     { term: 'Size curve log(mcap) on log(TVL)', loo: curveLoo.miss, time: curveTime.miss, verdict: 'kept' },
-    { term: '+ Category effect, shrunk (k=40, cap x2.5)', loo: catV.loo, time: catV.time, verdict: kept(catV) },
-    { term: '+ 7-day growth carry (w=0.5, capped x0.8-x1.25)', loo: growthV.loo, time: growthV.time, verdict: kept(growthV) },
-    { term: '+ Seasoning by age (x0.85-x1.00)', loo: seasonV.loo, time: seasonV.time, verdict: kept(seasonV) },
-    { term: 'Full model (curve + category + growth + seasoning)', loo: loo.miss, time: time.miss, verdict: 'kept' },
+    { term: 'Curve + category only', loo: catV.loo, time: catV.time, verdict: kept(catV) },
+    { term: 'Curve + 7-day growth only', loo: growthV.loo, time: growthV.time, verdict: kept(growthV) },
+    { term: 'Curve + seasoning only', loo: seasonV.loo, time: seasonV.time, verdict: kept(seasonV) },
+    { term: 'Curve + chain count only', loo: chainsV.loo, time: chainsV.time, verdict: held(chainsV) },
+    { term: 'Curve + log-age only', loo: logAgeV.loo, time: logAgeV.time, verdict: held(logAgeV) },
+    { term: 'Full model (all four terms)', loo: loo.miss, time: time.miss, verdict: 'kept' },
   ];
 
   // Bands from the final model's leave-one-out residuals.
@@ -646,7 +735,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const bands = { q10: quantile(residuals, 0.1), q25: quantile(residuals, 0.25), q75: quantile(residuals, 0.75), q90: quantile(residuals, 0.9) };
 
   // Price every rankable protocol.
-  const fullPred = makePredictor(comps, FULL_OPTS);
+  const fullPred = makePredictor(comps, ages, FULL_OPTS);
   interface Priced {
     p: Protocol;
     age: number | null;
@@ -683,7 +772,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   for (let ref = 0; ref < BOOT_REFS; ref++) {
     const sample: Protocol[] = [];
     for (let i = 0; i < comps.length; i++) sample.push(comps[Math.floor(rng() * comps.length)]!);
-    const pred = makePredictor(sample, FULL_OPTS);
+    const pred = makePredictor(sample, ages, FULL_OPTS);
     const scored = priced.map((pr) => ({ slug: pr.p.slug, v: Math.pow(10, pred(pr.p, pr.age)) * pr.odds }));
     scored.sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : 1));
     scored.forEach((s, i) => ranks.get(s.slug)!.push(i + 1));
@@ -789,8 +878,9 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       loo,
       time,
       flat: { loo_miss: flatLoo.miss, time_miss: flatTime.miss },
-      brier,
+      brier: { ...brier, unshrunk: brierUnshrunkScore },
     },
+    odds_buckets: oddsModel.buckets,
     ablation,
     accounting: { ranked: rows.length, trades, setAside, reasons },
     totals: {

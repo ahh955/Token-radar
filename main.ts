@@ -1,4 +1,12 @@
-// Token Radar, round 3: the program that builds the board.
+// Token Radar, round 4: the program that builds the board.
+//
+// Round 4 is a display-only rebuild on the same radar-3 model: the board
+// numbers are identical to round 3, and the dashboard gains a second
+// evidence panel (the token-odds Brier ladder and the peers'-record bar
+// chart), "Best farms now" cards, a break-even odds line, and a peers
+// table that hides outliers more than 10x off the curve. Two candidate
+// model terms (chain count, log-age) are tested held-out in the ablation
+// and labelled honestly — neither is adopted in this round.
 //
 // Reads the sealed DefiLlama snapshot, scores every pre-token protocol with
 // the fitted model in lib/model.ts, and writes the ranked board, the
@@ -49,6 +57,10 @@ const { board, radar } = buildRadar(snapshot);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) fail(`the model wrote a board the gate refuses: ${issue}`);
 
+// The two candidate terms the ablation tested this round (neither adopted).
+const chainsRow = radar.ablation.find((a) => a.term.includes('chain count'));
+const logAgeRow = radar.ablation.find((a) => a.term.includes('log-age'));
+
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
 writeFileSync(join(out, 'data.js'), dataScript(radar));
@@ -93,6 +105,8 @@ process.stdout.write(
     `token radar: curve 10^${radar.curve.a.toFixed(4)} x TVL^${radar.curve.b.toFixed(4)} on ${radar.comps_n} comps; ` +
     `held-out miss x${radar.tests.loo.miss} (LOO) / x${radar.tests.time.miss} (older->newer); ` +
     `implied total $${radar.total_implied.toLocaleString('en-US')}\n` +
+    `token radar: tested terms — chain count x${chainsRow!.loo} (LOO) / x${chainsRow!.time} (older->newer), ${chainsRow!.verdict}; ` +
+    `log-age x${logAgeRow!.loo} / x${logAgeRow!.time}, ${logAgeRow!.verdict}; odds Brier ${radar.tests.brier.model} shrunk / ${radar.tests.brier.unshrunk} raw / ${radar.tests.brier.base} base\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dash.length} files, ${sourceBytes} source bytes), ` +
     `${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

@@ -83,9 +83,33 @@ function renderHead() {
   $('integrity').innerHTML = '✓ This table = board.json: ' + ok + ' of ' + R.rows.length + ' rows recomputed here (within rounding) · ranks 1–' +
     R.rows.length + ' in order, values never rise ✓ totals equal: ' + full(sum) + ' ✓ checksum ' + checksum(R.rows) + ' = ' +
     R.checksum + ' ✓ watchlist ' + wl + ' of 40 ranked ✓ ledger ' + R.snapshot_n + ' of ' + R.snapshot_n + ' protocols.';
-  $('ablation').innerHTML = '<table class="mini"><tr><th>Model term</th><th class="num">Leave-one-out miss</th><th class="num">Older→newer miss</th><th>Verdict</th></tr>' +
-    R.ablation.map((a) => '<tr><td>' + esc(a.term) + '</td><td class="num">×' + a.loo + '</td><td class="num">×' + a.time +
-    '</td><td>' + (a.verdict === 'kept' ? '<b style="color:#86efac">kept</b>' : a.verdict === 'baseline' ? 'baseline' : '<b style="color:#fbbf24">' + a.verdict + '</b>') + '</td></tr>').join('') + '</table>';
+  $('ablation').innerHTML = '<table class="mini"><tr><th>Model term</th><th class="num">LOO miss</th><th class="num">Time miss</th><th>Verdict</th></tr>' +
+    R.ablation.map((a) => {
+      const v = a.verdict === 'kept' ? '<b style="color:#86efac">kept</b>' : a.verdict === 'baseline' ? 'baseline'
+        : a.verdict.indexOf('held') >= 0 ? '<b style="color:#fbbf24">held</b>' : '<b style="color:#fbbf24">' + a.verdict + '</b>';
+      return '<tr><td>' + esc(a.term) + '</td><td class="num">×' + a.loo + '</td><td class="num">×' + a.time + '</td><td>' + v + '</td></tr>';
+    }).join('') + '</table>' +
+    '<p class="small">Each row adds one term; chain-count and log-age slopes are fitted inside each fold.</p>' +
+    (R.ablation.some((a) => a.verdict.indexOf('held') >= 0)
+      ? '<p class="small">“Held” = passes both tests but not adopted — the model is unchanged from round 3.</p>' : '');
+  const br = t.brier;
+  $('odds').innerHTML = '<table class="mini"><tr><th>Odds forecast</th><th class="num">Brier</th><th class="num">n</th></tr>' +
+    '<tr><td>Base rate only</td><td class="num">' + br.base + '</td><td class="num">' + br.n + '</td></tr>' +
+    '<tr><td>Raw bucket shares</td><td class="num">' + br.unshrunk + '</td><td class="num">' + br.n + '</td></tr>' +
+    '<tr><td><b>Shrunk buckets (adopted)</b></td><td class="num"><b>' + br.model + '</b></td><td class="num">' + br.n + '</td></tr></table>' +
+    '<div style="margin-top:5px">' +
+    R.odds_buckets.map((b) => '<div class="ob"><span class="obl">' + esc(b.label) + '</span><span class="bar obb"><i style="width:' + Math.round(b.share * 100) + '%"></i></span><span class="obn">' + Math.round(b.share * 100) + '% · ' + b.hit + '/' + b.n + '</span></div>').join('') + '</div>';
+  // Best farms now: top 3 rows by net per hour at plan size, straight from
+  // the stored farm figures — no new computation.
+  const best = [...R.rows].sort((a, b) => b.netHour - a.netHour).slice(0, 3);
+  $('bestfarms').innerHTML = '<h2>Best farms now <span style="color:#8fa1b5;font-weight:400;font-size:11px">— top net per hour at plan size</span></h2><div class="best">' +
+    best.map((r) => '<div class="bestcard"><b>#' + r.rank + ' ' + esc(r.name) + '</b><span>' + (r.netHour >= 0 ? '+' : '−') + '$' + Math.abs(r.netHour).toFixed(2) + '/h · net ' + (r.net >= 0 ? '+' : '−') + fmt(Math.abs(r.net)) + ' · ' + full(r.deposit) + ' deposit</span></div>').join('') + '</div>';
+  // Break-even odds at plan size, counted from the stored per-row figures:
+  // thresholds the token odds must clear for the farm to repay its costs.
+  const be10 = R.rows.filter((r) => r.breakeven <= 0.1).length;
+  const be33 = R.rows.filter((r) => r.breakeven > 0.1 && r.breakeven <= 1 / 3).length;
+  $('breakeven').textContent = 'Break-even token odds at plan size: ' + be10 + ' rows repay costs at ≤10% odds · ' + be33 +
+    ' more by ≤33% · ' + (R.rows.length - be10 - be33) + ' need more than 33%. These are cost thresholds, not farm verdicts.';
   $('rangehon').textContent = 'Range honesty (LOO): ' + t.loo.cov50 + '% in P25–P75 (50% exact) · ' +
     t.loo.cov80 + '% in P10–P90 (80% exact) · ' + t.loo.within3 + '% within 3× of the real cap.';
   $('scatter-note').textContent = 'Blue dots: traded tokens; teal dots: board rows at implied value; line: fitted curve with its P25–P75 band.';
@@ -177,12 +201,26 @@ function renderBoard() {
   scatter('scatter');
 }
 // ---- detail view (full page) -----------------------------------------------
+// Nearest traded peers, same category first, then by TVL closeness — but a
+// peer more than 10x off the curve is hidden by the display rule, so one
+// wild outlier cannot dominate the table. Returns the shown rows plus how
+// many nearer peers the rule hid.
 function peers(r) {
   const lt = Math.log10(r.tvl);
-  return [...R.comps].sort((a, b) => {
+  const ratio = (p) => p.mcap / Math.pow(10, R.curve.a + R.curve.b * Math.log10(p.tvl));
+  const sorted = [...R.comps].sort((a, b) => {
     const sa = a.cat === r.cat ? 0 : 1, sb = b.cat === r.cat ? 0 : 1;
     return sa - sb || Math.abs(Math.log10(a.tvl) - lt) - Math.abs(Math.log10(b.tvl) - lt);
-  }).slice(0, 6);
+  });
+  const shown = [];
+  let hidden = 0;
+  for (const p of sorted) {
+    if (shown.length >= 6) break;
+    const q = ratio(p);
+    if (q >= 0.1 && q <= 10) shown.push(p);
+    else hidden++;
+  }
+  return { shown, hidden };
 }
 function renderDetail() {
   const s = S();
@@ -192,7 +230,7 @@ function renderDetail() {
   const beTxt = beRaw > 1 ? 'over 100% — no odds repay the costs at this size' : Math.round(beRaw * 100) + '%';
   const t = R.tests;
   const decomp = [
-    ['Size curve', full(r.curve), R.curve.formula + ' on ' + R.comps_n + ' traded tokens (R² ' + R.curve.r2 + ')'],
+    ['Size curve', full(r.curve), R.curve.formula + ' on ' + R.comps_n + ' traded tokens'],
     ['Category ×' + r.catF.toFixed(3), full(Math.round(r.curve * r.catF)), r.cat + ' — mean residual, shrunk with k=40 pseudo-peers, capped ×2.5'],
     ['Growth ×' + r.growthF.toFixed(3), full(Math.round(r.curve * r.catF * r.growthF)), '7-day TVL change ' + pct(r.chg7) + ', weight 0.5, held to ×0.8–×1.25'],
     ['Seasoning ×' + r.seasonF.toFixed(3), full(r.ifLaunches), 'No-token age ' + ageStr(r.age) + ' — factor ×0.85–×1.00'],
@@ -205,6 +243,7 @@ function renderDetail() {
     return { when: whens[i] || 'Day ' + i, text: st.slice(0, ci).trim(), cost: st.slice(ci + 5, ti).trim(), time: st.slice(ti + 7).trim() };
   });
   const depOpts = [500, 1000, 5000], shOpts = [0.05, 0.1, 0.2];
+  const pr = peers(r);
   $('detail-view').innerHTML = '<div class="detail"><p><a href="#view=board">← Back to the board</a></p>' +
     '<h1>#' + r.rank + ' ' + esc(r.name) + ' <span style="color:#8fa1b5;font-size:14px">rank ' + r.rankLo + '–' + r.rankHi + ' across 200 refits · ' + r.tier + ' · ' + esc(r.cat) + '</span></h1>' +
     '<p class="sub">TVL ' + full(r.tvl) + ' · 7D ' + pct(r.chg7) + ' · no token for ' + ageStr(r.age) + ' · chains: ' + r.chains.map(esc).join(', ') + ' · cheapest chain for the plan: ' + esc(r.chain) + '</p>' +
@@ -216,10 +255,11 @@ function renderDetail() {
     '<h2>How the figure is made</h2><table class="mini"><tr><th>Step</th><th class="num">Value</th><th>Fit basis</th></tr>' +
     decomp.map((d) => '<tr><td><b>' + esc(d[0]) + '</b></td><td class="num">' + d[1] + '</td><td>' + esc(d[2]) + '</td></tr>').join('') + '</table>' +
     '<h2>Nearest traded peers</h2><table class="mini"><tr><th>Token</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th><th class="num">Curve says</th><th class="num">Actual / curve</th></tr>' +
-    peers(r).map((p) => {
+    pr.shown.map((p) => {
       const cs = Math.pow(10, R.curve.a + R.curve.b * Math.log10(p.tvl));
       return '<tr><td><b>' + esc(p.name) + '</b> ' + esc(p.sym) + '</td><td>' + esc(p.cat) + '</td><td class="num">' + fmt(p.tvl) + '</td><td class="num">' + fmt(p.mcap) + '</td><td class="num">' + (p.mcap / p.tvl).toFixed(2) + '×</td><td class="num">' + fmt(cs) + '</td><td class="num">' + (p.mcap / cs).toFixed(2) + '×</td></tr>';
     }).join('') + '</table>' +
+    '<p class="small">Peers more than 10× off the curve are hidden by the display rule — ' + pr.hidden + ' hidden for this row.</p>' +
     '<h2>Farm verdict — ' + f.verdict + '</h2><div class="grid">' +
     '<div class="box farm"><b>' + (f.net >= 0 ? '+' : '−') + '$' + Math.abs(f.net).toFixed(2) + '</b><span>net after fees and T-bill</span></div>' +
     '<div class="box"><b>' + (f.netHour >= 0 ? '+' : '−') + '$' + Math.abs(f.netHour).toFixed(2) + '/h</b><span>net per hands-on hour (' + r.hours + ' h)</span></div>' +
@@ -267,7 +307,7 @@ function renderMethod() {
     ' record no token and pass the house rules, so they are ranked. ' + A.trades + ' already record a token and are kept apart as comps. ' +
     A.setAside + ' no-token protocols are set aside by rule: ' + A.reasons.map((r) => r.reason + ' (' + r.n + ')').join(', ') + '.</p>' +
     '<h2>The curve</h2><p>Log market cap on log TVL, fitted by least squares on ' + R.comps_n + ' traded tokens (one row per ticker, ' +
-    'positive market cap, never a set-aside kind): <b>' + esc(R.curve.formula) + '</b>, R² ' + R.curve.r2 + '. A flat multiple is shown only as the beaten baseline. ' +
+    'positive market cap, never a set-aside kind): <b>' + esc(R.curve.formula) + '</b>. A flat multiple is shown only as the beaten baseline. ' +
     '16 snapshot records carry a zero or negative market cap and are excluded from the fit.</p>' +
     '<h2>Category, growth, seasoning</h2><p>Each category shifts the curve by its mean residual, shrunk toward the curve with 40 pseudo-observations and capped at ×2.5 — ' +
     'thin categories barely move the value. Growth carries the 7-day TVL change at weight 0.5, held to ×0.8–×1.25. Seasoning runs ×0.85–×1.00 by days with no token. ' +
@@ -278,7 +318,7 @@ function renderMethod() {
     R.cat_offsets.map((c) => '<tr><td>' + esc(c.cat) + '</td><td class="num">' + c.n + '</td><td class="num">×' + c.factor + '</td></tr>').join('') + '</table>' +
     '<h2>Farm plans</h2><p>Each row’s plan names a play by its category, the cheapest of its own chains (gas table: Ethereum $3.50, Bitcoin $2.00, Tron $0.30, Avalanche $0.15, Arbitrum $0.12, Optimism $0.10, Binance $0.10, Base $0.08, Linea $0.08, Solana $0.05, Hyperliquid L1 $0.05, Monad $0.05, Plasma $0.05, Polygon $0.04, other chains $0.50 per transaction; four transactions plus $0.50). ' +
     R.rules.deposit + ' ' + R.rules.hold + ' Slice = 10% × implied × deposit / TVL; net = slice − fees − 4% T-bill forgone over the hold. ' + R.rules.verdict + '</p>' +
-    '<h2>Limits</h2><p>One day of snapshot data; no yields, no points programs, no team or audit signal. The curve explains only part of market cap (R² ' + R.curve.r2 + '). ' +
+    '<h2>Limits</h2><p>One day of snapshot data; no yields, no points programs, no team or audit signal. The held-out miss is ×' + t.loo.miss + ' (leave-one-out) — wide bands, honest about it. ' +
     '“Records no token” is the list’s record, not proof. The model ranks; it does not price to the dollar.</p></div>';
   scatter('scatter2');
 }
