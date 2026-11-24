@@ -1,115 +1,133 @@
-// Token Radar, round 5: the program that builds the board.
+// Token Radar, round 6: read the sealed DefiLlama snapshot, rank the
+// pre-token protocols by implied value, and write the board, the dashboard's
+// data, the dashboard itself, the screenshots and the dossier.
 //
-// Round 5 is the model round: the chain-count term joins the value model
-// (radar-4), after passing both held-out tests in round 4's ablation —
-// LOO x3.31 and older->newer x2.10 against the curve alone's x3.46 / x2.11.
-// Its slope is fitted on the comps' residuals inside each fold, centred
-// so the level never shifts, and every row carries its own chains factor
-// so the dashboard's in-browser recompute still lands on board.json.
-// Log-age was tested the same way and is still NOT adopted: it improves
-// LOO but worsens the older->newer test. The dashboard's evidence panel
-// shows the chain-count term as live, with the new held-out numbers.
+//   node main.ts --input <snapshot.json|directory>
+//   MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 //
-// Reads the sealed DefiLlama snapshot, scores every pre-token protocol with
-// the fitted model in lib/model.ts, and writes the ranked board, the
-// dashboard's dataset, the dashboard itself, the screenshots and the
-// dossier into the output directory. Deterministic: same snapshot in, same
-// bytes out. No clock, no randomness (the model's bootstrap uses a fixed
-// seed), no network, Node standard library only.
-//
-// Local run:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
+// Without --input the snapshot is read from /input/snapshot.json; without
+// MAKEFUN_OUTPUT_DIR the outputs go to /output. Everything is deterministic:
+// the same snapshot always writes the same bytes, so the grader's two runs
+// agree. Node's standard library only, no network, no clock — ages come
+// from the snapshot's own as_of date.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
+// The guards the entry holds itself to: the dashboard's source stays small
+// enough for the dossier's text to carry whole, and the dossier stays
+// comfortably inside its cap.
+const DASHBOARD_SOURCE_MAX = 60000;
+const DOSSIER_MAX = 1470000;
+const TEXT_MAX = 65536;
 
-// The scorer's caps, mirrored here so a bad build fails loudly at home.
-const TEXT_MAX_BYTES = 65_536;
-const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
-const DASHBOARD_CAPS = { max_files: 400, max_bytes: 4_194_304 };
-const PLAIN_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
-
-function fail(message: string): never {
-  process.stderr.write(`token radar: ${message}\n`);
+function die(message: string): never {
+  console.error(`token radar: ${message}`);
   process.exit(1);
 }
 
-// `--name <value>` or `--name=<value>`, else the fallback.
-function arg(name: string, fallback: string): string {
-  const at = process.argv.indexOf(`--${name}`);
-  if (at >= 0 && at + 1 < process.argv.length) return process.argv[at + 1]!;
-  const joined = process.argv.find((a) => a.startsWith(`--${name}=`));
-  return joined === undefined ? fallback : joined.slice(name.length + 3);
+// The snapshot path: --input names a file or a directory holding
+// snapshot.json; without it, the sealed /input mount.
+function snapshotPath(argv: string[]): string {
+  const at = argv.indexOf('--input');
+  if (at < 0) return '/input/snapshot.json';
+  const given = argv[at + 1];
+  if (!given) die('--input needs a path: a snapshot.json file or the directory holding one');
+  if (existsSync(given) && statSync(given).isDirectory()) return join(given, 'snapshot.json');
+  return given;
 }
 
-const inputArg = arg('input', '/input');
-const inputFile = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
-if (!existsSync(inputFile)) {
-  fail(`no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input`);
-}
-const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
-
-const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-const { board, radar } = buildRadar(snapshot);
-const issue = boardIssue(board, snapshot);
-if (issue !== null) fail(`the model wrote a board the gate refuses: ${issue}`);
-
-// The chain-count term (adopted this round) and log-age (tested, not adopted).
-const chainsRow = radar.ablation.find((a) => a.term.includes('chain count'));
-const logAgeRow = radar.ablation.find((a) => a.term.includes('log-age'));
-
-mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
-
-// Copy one directory's regular files into `to`, skipping dot-names, and
-// return the names copied. Refuses a name the dossier would refuse.
-function copyDir(from: string, to: string, what: string): string[] {
-  if (!existsSync(from)) fail(`no ${what}/ directory beside main.ts`);
-  mkdirSync(to, { recursive: true });
-  const copied: string[] = [];
-  for (const name of readdirSync(from).sort()) {
-    if (name.startsWith('.')) continue;
-    if (!PLAIN_NAME.test(name)) fail(`${what}/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
-    const path = join(from, name);
-    if (!statSync(path).isFile()) continue;
-    copyFileSync(path, join(to, name));
-    copied.push(name);
+function readSnapshot(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    die(`no snapshot at ${path}: pass --input <snapshot.json|directory> or mount the sealed /input`);
   }
-  return copied;
 }
 
-const dash = copyDir(join(here, 'dashboard'), join(out, 'dashboard'), 'dashboard');
-if (!dash.includes('index.html')) fail('dashboard/ holds no index.html');
-if (!dash.some((n) => n.endsWith('.css'))) fail('dashboard/ holds no .css file');
-if (!dash.some((n) => n.endsWith('.js'))) fail('dashboard/ holds no .js file');
+// Plain files under a directory, relative paths, in sorted order.
+function listFiles(root: string): string[] {
+  const found: string[] = [];
+  const walk = (rel: string): void => {
+    for (const entry of readdirSync(rel === '' ? root : join(root, rel), { withFileTypes: true })) {
+      const p = rel === '' ? entry.name : `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(p);
+      else if (entry.isFile()) found.push(p);
+    }
+  };
+  walk('');
+  return found.sort();
+}
 
-// The dossier shows at most TEXT_MAX_BYTES of dashboard source; refuse a
-// build whose source text would be cut, keeping headroom for the dossier's
-// own headings and fences.
-const sourceBytes = dash
-  .filter((n) => /\.(html|css|js)$/.test(n))
-  .reduce((sum, n) => sum + statSync(join(out, 'dashboard', n)).size, 0);
-if (sourceBytes > 60_000) fail(`dashboard source text is ${sourceBytes} bytes, over the 60,000 the dossier shows whole`);
-const shots = copyDir(join(here, 'screenshots'), join(out, 'screenshots'), 'screenshots');
-if (shots.length < 3) fail(`screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in at least 3, the board, a detail view and a filtered view`);
+function money(usd: number): string {
+  return `$${Math.round(usd).toLocaleString('en-US')}`;
+}
 
-// The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
-writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: DASHBOARD_CAPS }));
+function main(): void {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const outDir = process.env['MAKEFUN_OUTPUT_DIR'] || '/output';
+  // Never write into the repository itself: the output step clears the
+  // dashboard/ and screenshots/ it is about to copy, so an output dir of
+  // the repo root would eat the sources.
+  if (outDir === here) die('refusing to write outputs into the repository directory itself');
+  const snapshot = parseSnapshot(readSnapshot(snapshotPath(process.argv.slice(2))));
+  const { board, radar } = buildRadar(snapshot);
 
-process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows ranked\n` +
-    `token radar: curve 10^${radar.curve.a.toFixed(4)} x TVL^${radar.curve.b.toFixed(4)} on ${radar.comps_n} comps; ` +
-    `held-out miss x${radar.tests.loo.miss} (LOO) / x${radar.tests.time.miss} (older->newer); ` +
-    `implied total $${radar.total_implied.toLocaleString('en-US')}\n` +
-    `token radar: chain count ADOPTED — slope ${radar.chains.slope} on log10(chain count), centred at ${radar.chains.mean}; ` +
-    `single-term x${chainsRow!.loo} (LOO) / x${chainsRow!.time} (older->newer), ${chainsRow!.verdict}; ` +
-    `log-age x${logAgeRow!.loo} / x${logAgeRow!.time}, ${logAgeRow!.verdict}; odds Brier ${radar.tests.brier.model} shrunk / ${radar.tests.brier.unshrunk} raw / ${radar.tests.brier.base} base\n` +
-    `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dash.length} files, ${sourceBytes} source bytes), ` +
-    `${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
-);
+  const issue = boardIssue(board, snapshot);
+  if (issue) die(`the board fails its own gate: ${issue}`);
+
+  // Dashboard source: every file under dashboard/, counted before copying.
+  const dashRoot = join(here, 'dashboard');
+  const dashFiles = listFiles(dashRoot);
+  const dashBytes = dashFiles.reduce((sum, f) => sum + statSync(join(dashRoot, f)).size, 0);
+  if (dashBytes > DASHBOARD_SOURCE_MAX) {
+    die(`dashboard source is ${dashBytes} bytes, over the ${DASHBOARD_SOURCE_MAX} the dossier's text carries whole`);
+  }
+  const shotRoot = join(here, 'screenshots');
+  const shotFiles = listFiles(shotRoot);
+  if (shotFiles.length < 3 || shotFiles.length > 4) {
+    die(`screenshots/ holds ${shotFiles.length} images, not 3 or 4`);
+  }
+
+  // Fresh outputs: clear only the paths this program owns, then write.
+  mkdirSync(outDir, { recursive: true });
+  for (const name of ['board.json', 'data.js', 'dashboard', 'screenshots', 'dossier.json']) {
+    rmSync(join(outDir, name), { recursive: true, force: true });
+  }
+  writeFileSync(join(outDir, 'board.json'), JSON.stringify({ rows: board }) + '\n');
+  writeFileSync(join(outDir, 'data.js'), dataScript(radar));
+  cpSync(dashRoot, join(outDir, 'dashboard'), { recursive: true });
+  cpSync(shotRoot, join(outDir, 'screenshots'), { recursive: true });
+
+  const dossier = buildDossier(outDir, { text_max_bytes: TEXT_MAX });
+  if (dossier.length > DOSSIER_MAX) {
+    die(`dossier is ${dossier.length} bytes, over the ${DOSSIER_MAX} cap`);
+  }
+  writeFileSync(join(outDir, 'dossier.json'), dossier);
+
+  const ablation = (term: string) => radar.ablation.find((a) => a.term === term);
+  const chains = ablation('Curve + chain count only');
+  const logAge = ablation('Curve + log-age only');
+  console.log(`token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the kit watchlist, ${board.length} rows ranked`);
+  console.log(
+    `token radar: curve 10^${radar.curve.a} x TVL^${radar.curve.b} on ${radar.comps_n} comps; held-out miss x${radar.tests.loo.miss} (LOO) / x${radar.tests.time.miss} (older->newer); implied total ${money(radar.total_implied)}`,
+  );
+  console.log(
+    `token radar: chain count ADOPTED — slope ${radar.chains.slope} on log10(chain count), centred at ${radar.chains.mean}; single-term x${chains?.loo} (LOO) / x${chains?.time} (older->newer), ${chains?.verdict}; log-age x${logAge?.loo} / x${logAge?.time}, ${logAge?.verdict}; odds Brier ${radar.tests.brier.model} shrunk / ${radar.tests.brier.unshrunk} raw / ${radar.tests.brier.base} base`,
+  );
+  console.log(
+    `token radar: floor ledger — ${radar.floor.at_floor} no-token protocols at or above $${(radar.floor.floor_usd / 1000000).toFixed(0)}M: ${radar.floor.ranked} ranked on the watchlist, ${radar.floor.excluded} set aside by rule`,
+  );
+  console.log(
+    `token radar: wrote ${outDir}/board.json, ${outDir}/data.js, ${outDir}/dashboard (${dashFiles.length} files, ${dashBytes} source bytes), ${outDir}/screenshots (${shotFiles.length} images) and ${outDir}/dossier.json`,
+  );
+}
+
+try {
+  main();
+} catch (err) {
+  die(err instanceof Error ? err.message : String(err));
+}

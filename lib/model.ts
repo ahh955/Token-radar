@@ -20,6 +20,11 @@
 //               held-out tests in round 4's ablation.
 //   odds        P(records a token) by age-with-no-token bucket, counted over
 //               all 758 protocols and shrunk toward the base rate.
+//   watchlist   Round 6: rankable and at or above the $50M floor (60 rows),
+//               not just the kit list's 40 — that list also drops protocols
+//               DefiLlama ties to a parent protocol, a field the snapshot
+//               does not carry. The floor ledger accounts for all 132
+//               no-token protocols at or above the floor, ranked or set aside.
 //   implied     value-if-launches x odds, whole dollars, distinct per row.
 //   bands       P25-P75 / P10-P90 from leave-one-out residual quantiles.
 //   rank range  P10-P90 of rank across 200 fixed-seed bootstrap refits.
@@ -119,6 +124,11 @@ export interface Radar {
   odds_buckets: { label: string; n: number; hit: number; share: number; odds: number }[];
   ablation: { term: string; loo: number; time: number; verdict: string }[];
   accounting: { ranked: number; trades: number; setAside: number; reasons: { reason: string; n: number }[] };
+  // The $50M floor ledger (round 6): every no-token protocol at or above
+  // the floor, ranked or set aside, with the exclusion breakdown.
+  floor: { floor_usd: number; at_floor: number; ranked: number; excluded: number; excluded_reasons: { reason: string; n: number }[] };
+  // Every set-aside protocol, so the Method tab can show the full list.
+  set_aside: { slug: string; name: string; reason: string; tvl: number }[];
   totals: { implied: number; tvl: number; farm: number; marginal: number; skip: number };
   total_implied: number;
   bands: { q10: number; q25: number; q75: number; q90: number };
@@ -669,14 +679,19 @@ const FULL_OPTS: FitOptions = { cat: true, growth: true, season: true, chains: t
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Radar } {
   const asOfMs = Date.parse(`${snapshot.as_of}T00:00:00Z`);
   const protocols = snapshot.protocols;
-  const watch = new Set(snapshot.watchlist);
   const ages = new Map<string, number | null>();
   for (const p of protocols) ages.set(p.slug, ageDays(p, asOfMs));
 
-  // Universe accounting: every protocol lands in exactly one group.
+  // Universe accounting: every protocol lands in exactly one group. The
+  // floor ledger counts the no-token protocols at or above the floor
+  // separately, ranked or set aside, so the board can show 132 of 132.
   const reasonCounts = new Map<string, number>();
+  const floorReasonCounts = new Map<string, number>();
+  const setAsideList: { slug: string; name: string; reason: string; tvl: number }[] = [];
   const rankable: Protocol[] = [];
   let trades = 0;
+  let atFloor = 0;
+  let floorRanked = 0;
   for (const p of protocols) {
     if (hasToken(p)) {
       trades++;
@@ -685,11 +700,21 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     const reason = setAsideReason(p);
     if (reason) {
       reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+      setAsideList.push({ slug: p.slug, name: p.name, reason, tvl: p.tvl_usd });
+      if (p.tvl_usd >= snapshot.floor_usd) {
+        atFloor++;
+        floorReasonCounts.set(reason, (floorReasonCounts.get(reason) ?? 0) + 1);
+      }
       continue;
     }
     rankable.push(p);
+    if (p.tvl_usd >= snapshot.floor_usd) {
+      atFloor++;
+      floorRanked++;
+    }
   }
   const setAside = [...reasonCounts.values()].reduce((s, n) => s + n, 0);
+  setAsideList.sort((a, b) => b.tvl - a.tvl || (a.slug < b.slug ? -1 : 1));
 
   // Comps: one row per ticker, positive market cap, never a set-aside kind.
   const seen = new Set<string>();
@@ -828,7 +853,11 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     const k = (DROP_SHARE * pr.implied) / p.tvl_usd - (TBILL * hold) / 365;
     const paysFrom = k > 0 ? Math.max(1, Math.ceil(fees / k)) : null;
     const [rankLo, rankHi] = rankRange(p.slug);
-    const tier = watch.has(p.slug) ? 'watchlist' : pr.age !== null && pr.age <= 180 ? 'early' : p.change_7d !== null && p.change_7d >= 25 ? 'early' : 'off-list';
+    // Round 6 watchlist: rankable and at or above the $50M floor. The kit's
+    // list names 40 of these; twenty more pass every stated rule and are
+    // left off that list only because DefiLlama ties them to a parent
+    // protocol, a field the snapshot does not carry — so they rank here too.
+    const tier = p.tvl_usd >= snapshot.floor_usd ? 'watchlist' : pr.age !== null && pr.age <= 180 ? 'early' : p.change_7d !== null && p.change_7d >= 25 ? 'early' : 'off-list';
     return {
       slug: p.slug,
       name: p.name,
@@ -911,6 +940,14 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     odds_buckets: oddsModel.buckets,
     ablation,
     accounting: { ranked: rows.length, trades, setAside, reasons },
+    floor: {
+      floor_usd: snapshot.floor_usd,
+      at_floor: atFloor,
+      ranked: floorRanked,
+      excluded: atFloor - floorRanked,
+      excluded_reasons: [...floorReasonCounts.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n),
+    },
+    set_aside: setAsideList,
     totals: {
       implied: totalImplied,
       tvl: totalTvl,

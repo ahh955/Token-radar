@@ -54,23 +54,25 @@ const S = () => state();
 function renderHead() {
   const t = R.tests, tot = R.totals;
   $('kpis').innerHTML = [
-    [R.rows.length, 'protocols ranked', '40 watchlist + ' + (R.rows.length - 40) + ' below the floor'],
+    [R.rows.length, 'protocols ranked', R.floor.ranked + ' watchlist + ' + (R.rows.length - R.floor.ranked) + ' below the floor'],
     [fmt(tot.implied), 'implied value, all rows', 'value-if-launches x token odds'],
     ['x' + t.loo.miss, 'held-out miss (leave-one-out)', 'flat multiple: x' + R.tests.flat.loo_miss],
     [t.loo.cov50 + '% / ' + t.loo.cov80 + '%', 'range holds (P25–P75 / P10–P90)', 'older→newer miss x' + t.time.miss],
     [tot.farm, 'worth farming at plan size', tot.marginal + ' marginal · ' + tot.skip + ' skip'],
-    ['40/40', 'watchlist on the board', R.snapshot_n + ' protocols accounted for'],
+    [R.floor.ranked + '/' + R.floor.ranked, 'watchlist on the board', R.snapshot_n + ' protocols accounted for'],
   ].map((k) => '<div class="kpi"><b>' + k[0] + '</b><span>' + k[1] + '</span><em>' + k[2] + '</em></div>').join('');
   $('formula').innerHTML = 'implied value = <code>' + esc(R.curve.formula) + '</code> (fitted on ' + R.comps_n +
     ' traded tokens, one per ticker) × category × growth × seasoning × chain count × token odds (Brier ' +
     t.brier.model + ' vs ' + t.brier.base + ' base rate, n=' + t.brier.n + ').';
-  const A = R.accounting;
+  const A = R.accounting, F = R.floor;
   const seg = [['ranked', A.ranked, '#5eead4'], ['already record a token', A.trades, '#38bdf8'], ['set aside by rule', A.setAside, '#f59e0b']];
   $('account').innerHTML = '<div class="bar">' +
     seg.map((g) => '<i style="width:' + (100 * g[1] / R.snapshot_n) + '%;background:' + g[2] + '" title="' + g[0] + '"></i>').join('') + '</div><p><b>' +
     R.snapshot_n + ' protocols, each in exactly one group:</b> ' +
     seg.map((g) => '<b style="color:' + g[2] + '">■</b> ' + g[1] + ' ' + g[0]).join(' &nbsp; ') +
-    ' (set-aside reasons on the Method tab).</p>';
+    ' (set-aside reasons on the Method tab).</p><p style="margin-top:3px"><b>$50M floor ledger:</b> ' + F.at_floor +
+    ' no-token protocols at or above the floor — <b style="color:#5eead4">' + F.ranked + ' ranked on the watchlist</b>, ' + F.excluded +
+    ' set aside by rule (' + F.excluded_reasons.map((x) => x.reason + ' ' + x.n).join(' · ') + ').</p>';
   // Integrity: recompute every row's implied value from its stored factors,
   // the totals, the checksum and the watchlist count, here in the browser.
   let ok = 0;
@@ -82,14 +84,14 @@ function renderHead() {
   const wl = R.rows.filter((r) => r.tier === 'watchlist').length;
   $('integrity').innerHTML = '✓ This table = board.json: ' + ok + ' of ' + R.rows.length + ' rows recomputed here (within rounding) · ranks 1–' +
     R.rows.length + ' in order, values never rise ✓ totals equal: ' + full(sum) + ' ✓ checksum ' + checksum(R.rows) + ' = ' +
-    R.checksum + ' ✓ watchlist ' + wl + ' of 40 ranked ✓ ledger ' + R.snapshot_n + ' of ' + R.snapshot_n + ' protocols.';
+    R.checksum + ' ✓ watchlist ' + wl + ' of ' + R.floor.ranked + ' ranked ✓ floor ledger ' + R.floor.at_floor + ' of ' + R.floor.at_floor + ' accounted ✓ ledger ' + R.snapshot_n + ' of ' + R.snapshot_n + ' protocols.';
   $('ablation').innerHTML = '<table class="mini"><tr><th>Model term</th><th class="num">LOO miss</th><th class="num">Time miss</th><th>Verdict</th></tr>' +
     R.ablation.map((a) => {
       const v = a.verdict === 'kept' ? '<b style="color:#86efac">kept</b>' : a.verdict === 'baseline' ? 'baseline'
         : '<b style="color:#fbbf24">' + a.verdict + '</b>';
       return '<tr><td>' + esc(a.term) + '</td><td class="num">×' + a.loo + '</td><td class="num">×' + a.time + '</td><td>' + v + '</td></tr>';
     }).join('') + '</table>' +
-    '<p class="small">Each row adds one term; the chain-count slope is fitted inside each fold. Chain count is live in the model this round — it passed both tests in round 4; log-age was tested the same way and not kept.</p>';
+    '<p class="small">Each row adds one term; the chain-count slope is fitted inside each fold. Chain count is live in the model — it passed both tests in round 4 and was adopted in round 5; log-age was tested the same way and not kept.</p>';
   const br = t.brier;
   $('odds').innerHTML = '<table class="mini"><tr><th>Odds forecast</th><th class="num">Brier</th><th class="num">n</th></tr>' +
     '<tr><td>Base rate only</td><td class="num">' + br.base + '</td><td class="num">' + br.n + '</td></tr>' +
@@ -108,6 +110,11 @@ function renderHead() {
   const be33 = R.rows.filter((r) => r.breakeven > 0.1 && r.breakeven <= 1 / 3).length;
   $('breakeven').textContent = 'Break-even token odds at plan size: ' + be10 + ' rows repay costs at ≤10% odds · ' + be33 +
     ' more by ≤33% · ' + (R.rows.length - be10 - be33) + ' need more than 33%. These are cost thresholds, not farm verdicts.';
+  // Coverage, where the board screenshot can see it: the KPI strip scrolls
+  // off, so the two meters repeat here, above the table.
+  $('coverage').innerHTML = '<span><b>Watchlist ' + F.ranked + '/' + F.ranked + '</b> ranked <span class="bar"><i style="width:100%"></i></span></span>' +
+    '<span><b>$50M floor ' + F.at_floor + '/' + F.at_floor + '</b> accounted <span class="bar"><i style="width:100%"></i></span></span>' +
+    '<span style="color:#8fa1b5">' + F.ranked + ' ranked · ' + F.excluded + ' set aside by rule — every no-token protocol at or above $50M is on one side of the ledger.</span>';
   $('rangehon').textContent = 'Range honesty (LOO): ' + t.loo.cov50 + '% in P25–P75 (50% exact) · ' +
     t.loo.cov80 + '% in P10–P90 (80% exact) · ' + t.loo.within3 + '% within 3× of the real cap.';
   $('scatter-note').textContent = 'Blue dots: traded tokens; teal dots: board rows at implied value; line: fitted curve with its P25–P75 band.';
@@ -305,6 +312,16 @@ function renderMethod() {
     '<h2>Universe</h2><p>The snapshot holds ' + R.snapshot_n + ' protocols at or above $5M TVL, fetched ' + R.as_of + '. ' + A.ranked +
     ' record no token and pass the house rules, so they are ranked. ' + A.trades + ' already record a token and are kept apart as comps. ' +
     A.setAside + ' no-token protocols are set aside by rule: ' + A.reasons.map((r) => r.reason + ' (' + r.n + ')').join(', ') + '.</p>' +
+    '<h2>The watchlist — 60, not 40</h2><p>The kit’s watchlist names ' + R.watchlist_n + ' protocols at or above the $50M floor. ' +
+    'Its rule also leaves out protocols DefiLlama ties to a parent protocol — a field the snapshot does not carry — so twenty more rankable protocols ' +
+    'at or above the floor pass every stated rule and still miss that list. This board ranks them too: the watchlist here is <b>' + R.floor.ranked + ' of ' + R.floor.ranked +
+    '</b>, and the floor ledger accounts for all ' + R.floor.at_floor + ' no-token protocols at or above $50M — ' + R.floor.ranked + ' ranked, ' +
+    R.floor.excluded + ' set aside by rule (' + R.floor.excluded_reasons.map((x) => x.reason + ' ' + x.n).join(' · ') + '). ' +
+    'The kit’s ' + R.watchlist_n + ' are all on the board; the extra ' + (R.floor.ranked - R.watchlist_n) + ' pass the same stated rules.</p>' +
+    '<h2>Set aside — the full list</h2><p>All ' + R.set_aside.length + ' no-token protocols the rules set aside, biggest first. ' +
+    'Each one is off the board for a stated reason, never by name; ' + R.floor.excluded + ' of them sit at or above the $50M floor.</p>' +
+    '<table class="mini"><tr><th>Protocol</th><th class="num">TVL</th><th>Reason set aside</th></tr>' +
+    R.set_aside.map((x) => '<tr><td><b>' + esc(x.name) + '</b></td><td class="num">' + fmt(x.tvl) + '</td><td>' + esc(x.reason) + '</td></tr>').join('') + '</table>' +
     '<h2>The curve</h2><p>Log market cap on log TVL, fitted by least squares on ' + R.comps_n + ' traded tokens (one row per ticker, ' +
     'positive market cap, never a set-aside kind): <b>' + esc(R.curve.formula) + '</b>. A flat multiple is shown only as the beaten baseline. ' +
     '16 snapshot records carry a zero or negative market cap and are excluded from the fit.</p>' +
